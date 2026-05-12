@@ -22,19 +22,19 @@ def log(msg=''):
 
 BR = 32e9
 N = 4
-rolloff = 0.1
 h_taps = 101
+ROLLOFF_VALUES = [0.1, 0.25, 0.5, 0.75, 0.9]
 
 fs = N * BR
 Ts = 1 / fs
 
 log("=== RRC Filter Parameters ===")
-log(f"BR      = {BR/1e9:.1f} GBd")
-log(f"N       = {N}")
-log(f"rolloff = {rolloff}")
-log(f"h_taps  = {h_taps}")
-log(f"fs      = {fs/1e9:.1f} GHz")
-log(f"Ts      = {Ts*1e12:.3f} ps")
+log(f"BR       = {BR/1e9:.1f} GBd")
+log(f"N        = {N}")
+log(f"rolloffs = {ROLLOFF_VALUES}")
+log(f"h_taps   = {h_taps}")
+log(f"fs       = {fs/1e9:.1f} GHz")
+log(f"Ts       = {Ts*1e12:.3f} ps")
 log()
 
 # -------------------------------------------------
@@ -63,7 +63,6 @@ def raised_cosine(fc, fs, rolloff, n_taps, t0=0):
     t_v = n * Ts + t0
     tn_v = t_v * 2 / T
 
-    # np.sinc ya es sinc normalizado
     h_v = np.sinc(tn_v) * np.cos(np.pi * rolloff * tn_v) \
           / (1 - (2 * rolloff * tn_v)**2)
 
@@ -72,7 +71,7 @@ def raised_cosine(fc, fs, rolloff, n_taps, t0=0):
     return h_v
 
 # -------------------------------------------------
-# Root Raised Cosine = sqrt(raised cosine en freq)
+# Root Raised Cosine
 # -------------------------------------------------
 
 def root_raised_cosine(fc, fs, rolloff, n_taps, t0=0):
@@ -81,15 +80,12 @@ def root_raised_cosine(fc, fs, rolloff, n_taps, t0=0):
     rolloff = rolloff + 0.0001
     T = 1 / fc
 
-    # Force to odd
     n_taps = round_odd(n_taps)
 
-    # Time vector
     n = np.arange(-(n_taps - 1)//2, (n_taps - 1)//2 + 1)
     t_v = n * Ts + t0
     tn_v = t_v * 2 / T
 
-    # Filter taps
     numerator = (
         np.sin(np.pi * (1 - rolloff) * tn_v)
         + 4 * rolloff * tn_v * np.cos(np.pi * (1 + rolloff) * tn_v)
@@ -105,83 +101,141 @@ def root_raised_cosine(fc, fs, rolloff, n_taps, t0=0):
     center = (n_taps - 1) // 2
     h_v[center] = (1 + rolloff * (4/np.pi - 1))
 
-    # Normalización
     h_v = h_v / np.sum(h_v)
 
     return h_v
 
 # -------------------------------------------------
-# Generación filtros
+# Eje temporal normalizado (común a todos los filtros)
 # -------------------------------------------------
 
-h_rrc = root_raised_cosine(BR/2, fs, rolloff, h_taps)
-h_rrc_rrc = np.convolve(h_rrc, h_rrc)
-h_rc = raised_cosine(BR/2, fs, rolloff, len(h_rrc_rrc))
-
-log(f"RRC filter length:     {len(h_rrc)} taps")
-log(f"RRC*RRC filter length: {len(h_rrc_rrc)} taps")
-log(f"RC filter length:      {len(h_rc)} taps")
-
-# Verify RRC*RRC ≈ RC
-max_diff = np.max(np.abs(h_rrc_rrc - h_rc))
-log(f"Max difference |RRC*RRC - RC|: {max_diff:.6e}")
-log()
-
-# -------------------------------------------------
-# FFTs
-# -------------------------------------------------
+n_taps = round_odd(h_taps)
+n_v = np.arange(-(n_taps - 1)//2, (n_taps - 1)//2 + 1)
+t_norm_v = n_v * Ts * BR     # tiempo normalizado a T = 1/BR
 
 NFFT = 2048
 f = np.arange(-NFFT/2, NFFT/2) * fs / NFFT
-
-H_RRC = fftshift(np.abs(fft(h_rrc, NFFT)))
-H_RRC_RRC = H_RRC * H_RRC
-H_RC = fftshift(np.abs(fft(h_rc, NFFT)))
 
 # -------------------------------------------------
 # PLOTS
 # -------------------------------------------------
 
-n_rrc_v = np.arange(-(h_taps-1)//2, (h_taps-1)//2 + 1)
-n_rc_v = np.arange(-(len(h_rrc_rrc)-1)//2, (len(h_rrc_rrc)-1)//2 + 1)
+colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 
-fig1, ax1 = plt.subplots(figsize=(5, 5))
-ax1.plot(n_rrc_v, h_rrc, '--k', linewidth=1)
-ax1.plot(n_rc_v, h_rrc_rrc, 'r', linewidth=2)
-ax1.plot(n_rc_v, h_rc, '--b', linewidth=1.5)
-ax1.set_title('hrrc*hrrc = hrc')
-ax1.set_xlabel('Samples')
-ax1.set_ylabel('Amplitude')
+fig1, ax1 = plt.subplots(figsize=(7, 4))
+fig2, ax2 = plt.subplots(figsize=(7, 4))
+fig3, ax3 = plt.subplots(figsize=(7, 4))
+
+for color, beta in zip(colors, ROLLOFF_VALUES):
+    h_rrc = root_raised_cosine(BR/2, fs, beta, h_taps)
+    H_RRC = fftshift(np.abs(fft(h_rrc, NFFT)))
+
+    label = f'β = {beta}'
+
+    ax1.plot(t_norm_v, h_rrc, color=color, linewidth=1.5, label=label)
+
+    ax2.plot(f/1e9, H_RRC, color=color, linewidth=1.5, label=label)
+
+    H_RRC_dB = 20 * np.log10(np.maximum(H_RRC, 1e-10))
+    ax3.plot(f/1e9, H_RRC_dB, color=color, linewidth=1.5, label=label)
+
+    log(f"RRC (β={beta}): {n_taps} taps")
+
+log()
+
+# Figura 1 — respuesta al impulso
+ax1.axhline(0, color='k', linewidth=0.5)
+ax1.set_title('Respuesta al impulso — Root Raised Cosine')
+ax1.set_xlabel('Tiempo normalizado (t · BR)')
+ax1.set_ylabel('Amplitud')
 ax1.grid(True)
-ax1.legend(['hrrc', 'hrrc*hrrc', 'hrc'])
+ax1.legend()
+fig1.tight_layout()
 fig1.savefig(os.path.join(RESULTS_DIR, 'rrc_01_impulse_response.png'), dpi=150, bbox_inches='tight')
 plt.close(fig1)
 
-fig2, ax2 = plt.subplots(figsize=(5, 5))
-ax2.plot(f/1e9, H_RRC, '--k', linewidth=1)
-ax2.plot(f/1e9, H_RRC_RRC, 'r', linewidth=2)
-ax2.plot(f/1e9, H_RC, '--b', linewidth=1.5)
-ax2.axvline(BR/2/1e9, linestyle='--', color='k')
-ax2.set_title('Hrrc.Hrrc = Hrc')
-ax2.set_xlabel('Freq [GHz]')
-ax2.set_ylabel('Amplitude')
+# Figura 2 — respuesta en frecuencia lineal
+ax2.axvline(BR/2/1e9, linestyle='--', color='k', linewidth=0.8, label=f'BR/2 = {BR/2/1e9:.0f} GHz')
+ax2.set_title('Respuesta en frecuencia — Root Raised Cosine')
+ax2.set_xlabel('Frecuencia [GHz]')
+ax2.set_ylabel('Amplitud')
+ax2.set_xlim(-BR/1e9, BR/1e9)
 ax2.grid(True)
-ax2.legend(['Hrrc', 'Hrrc.Hrrc', 'Hrc'])
+ax2.legend()
+fig2.tight_layout()
 fig2.savefig(os.path.join(RESULTS_DIR, 'rrc_02_freq_response.png'), dpi=150, bbox_inches='tight')
 plt.close(fig2)
 
-fig3, ax3 = plt.subplots(figsize=(5, 5))
-ax3.plot(f/1e9, 20*np.log10(H_RRC), '--k', linewidth=1)
-ax3.plot(f/1e9, 20*np.log10(H_RRC_RRC), 'r', linewidth=2)
-ax3.plot(f/1e9, 20*np.log10(H_RC), '--b', linewidth=1.5)
-ax3.axvline(BR/2/1e9, linestyle='--', color='k')
-ax3.set_title('Hrrc.Hrrc = Hrc')
-ax3.set_xlabel('Freq [GHz]')
-ax3.set_ylabel('Amplitude [dB]')
+# Figura 3 — respuesta en frecuencia en dB
+ax3.axvline(BR/2/1e9, linestyle='--', color='k', linewidth=0.8, label=f'BR/2 = {BR/2/1e9:.0f} GHz')
+ax3.set_title('Respuesta en frecuencia [dB] — Root Raised Cosine')
+ax3.set_xlabel('Frecuencia [GHz]')
+ax3.set_ylabel('Amplitud [dB]')
+ax3.set_xlim(-BR/1e9, BR/1e9)
+ax3.set_ylim(-80, 5)
 ax3.grid(True)
-ax3.legend(['Hrrc', 'Hrrc.Hrrc', 'Hrc'])
+ax3.legend()
+fig3.tight_layout()
 fig3.savefig(os.path.join(RESULTS_DIR, 'rrc_03_freq_response_db.png'), dpi=150, bbox_inches='tight')
 plt.close(fig3)
+
+# -------------------------------------------------
+# Verificación RRC * RRC = RC
+# -------------------------------------------------
+
+# Eje temporal para el filtro convolucionado (2*h_taps - 1 taps)
+n_conv = 2 * n_taps - 1
+n_conv_v = np.arange(-(n_conv - 1)//2, (n_conv - 1)//2 + 1)
+t_norm_conv = n_conv_v * Ts * BR
+
+fig4, ax4 = plt.subplots(figsize=(7, 4))
+fig5, ax5 = plt.subplots(figsize=(7, 4))
+
+log("=== Verificación RRC*RRC = RC ===")
+
+for color, beta in zip(colors, ROLLOFF_VALUES):
+    h_rrc = root_raised_cosine(BR/2, fs, beta, h_taps)
+    h_rrc_rrc = np.convolve(h_rrc, h_rrc)           # 201 taps
+    h_rc = raised_cosine(BR/2, fs, beta, n_conv)     # 201 taps
+
+    # --- Dominio temporal ---
+    diff_time = h_rrc_rrc - h_rc
+    max_diff = np.max(np.abs(diff_time))
+    log(f"β={beta:4.2f}:  max|RRC*RRC - RC| = {max_diff:.4e}")
+
+    ax4.plot(t_norm_conv, diff_time, color=color, linewidth=1.5, label=f'β = {beta}')
+
+    # --- Dominio frecuencial ---
+    H_RRC = fftshift(np.abs(fft(h_rrc, NFFT)))
+    H_RC_f = fftshift(np.abs(fft(h_rc, NFFT)))
+    freq_error_dB = 20 * np.log10(np.maximum(np.abs(H_RRC**2 - H_RC_f), 1e-10))
+
+    ax5.plot(f/1e9, freq_error_dB, color=color, linewidth=1.5, label=f'β = {beta}')
+
+log()
+
+# Figura 4 — error en tiempo
+ax4.axhline(0, color='k', linewidth=0.5)
+ax4.set_title('Error temporal: RRC*RRC − RC')
+ax4.set_xlabel('Tiempo normalizado (t · BR)')
+ax4.set_ylabel('Error de amplitud')
+ax4.grid(True)
+ax4.legend()
+fig4.tight_layout()
+fig4.savefig(os.path.join(RESULTS_DIR, 'rrc_04_verification_time.png'), dpi=150, bbox_inches='tight')
+plt.close(fig4)
+
+# Figura 5 — error en frecuencia
+ax5.axvline(BR/2/1e9, linestyle='--', color='k', linewidth=0.8, label=f'BR/2 = {BR/2/1e9:.0f} GHz')
+ax5.set_title('Error frecuencial: |H_RRC² − H_RC| [dB]')
+ax5.set_xlabel('Frecuencia [GHz]')
+ax5.set_ylabel('Error [dB]')
+ax5.set_xlim(-BR/1e9, BR/1e9)
+ax5.grid(True)
+ax5.legend()
+fig5.tight_layout()
+fig5.savefig(os.path.join(RESULTS_DIR, 'rrc_05_verification_freq.png'), dpi=150, bbox_inches='tight')
+plt.close(fig5)
 
 # -------------------------------------------------
 # Save text output
