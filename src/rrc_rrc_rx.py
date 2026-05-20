@@ -22,7 +22,7 @@ def log(msg=''):
 
 BR = 32e9
 N = 4
-h_taps = 101
+h_taps = 501
 ROLLOFF_VALUES = [0.1, 0.25, 0.5, 0.75, 0.9]
 
 fs = N * BR
