@@ -199,24 +199,47 @@ for h, yup, fname_suffix, filter_name in [
     plt.close(fig)
 
 # -------------------------------
-# Eye Diagram (RC)
+# Eye Diagram
 # -------------------------------
-def eye_diagram(sig, sps, num_symbols=200, save_path=None):
-    samples = sps * 2
-    truncated = sig[:num_symbols*samples]
-    reshaped = truncated.reshape((-1, samples))
-    fig, ax = plt.subplots()
-    for row in reshaped:
-        ax.plot(np.real(row), alpha=0.3, color='steelblue')
-    ax.set_title(f"Diagrama de ojo — RC (β={rolloff})")
+def eye_diagram(sig, sps, title, num_traces=200, levels=None, save_path=None):
+    # Cada traza cubre 2 períodos de símbolo + 1 muestra extra para que el
+    # eje horizontal vaya de 0 a 2*sps (inclusive) sin recorte.
+    # Las trazas se extraen con ventanas solapadas que avanzan de a sps.
+    span = sps * 2 + 1
+    traces = [np.real(sig[i*sps : i*sps + span])
+              for i in range(num_traces)
+              if i*sps + span <= len(sig)]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for trace in traces:
+        ax.plot(trace, alpha=0.3, color='steelblue')
+    # Instantes de muestreo óptimos
+    for x in range(0, 2*sps + 1, sps):
+        ax.axvline(x, color='tomato', linestyle='--', linewidth=1.4,
+                   label='Instante de muestreo' if x == 0 else None)
+    # Niveles de símbolo de la constelación
+    if levels is not None:
+        for y in levels:
+            ax.axhline(y, color='black', linestyle='--', linewidth=1.4,
+                       label='Nivel de símbolo' if y == levels[0] else None)
+    ax.set_title(title)
     ax.set_xlabel("Muestra")
+    ax.set_xlim(0, span - 1)
+    ax.legend(fontsize=8, loc='lower right')
     ax.grid(True)
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-eye_diagram(yup_rc[500:5000], N,
-            save_path=os.path.join(RESULTS_DIR, 'basic_tx_05_eye_diagram.png'))
+# Niveles reales del alfabeto QAM (parte real de los símbolos)
+m = int(np.sqrt(M))
+sym_levels = sorted({2*(k % m) - m + 1 for k in range(M)})
+
+eye_diagram(yup_rc[500:],  N, title=f"Diagrama de ojo — RC  (β={rolloff})",
+            levels=sym_levels,
+            save_path=os.path.join(RESULTS_DIR, 'basic_tx_05_eye_diagram_rc.png'))
+eye_diagram(yup_rrc[500:], N, title=f"Diagrama de ojo — RRC (β={rolloff})",
+            levels=sym_levels,
+            save_path=os.path.join(RESULTS_DIR, 'basic_tx_06_eye_diagram_rrc.png'))
 
 # -------------------------------
 # Constellation TX
@@ -228,7 +251,7 @@ ax6.set_xlabel("In-Phase (I)")
 ax6.set_ylabel("Quadrature (Q)")
 ax6.grid(True)
 ax6.axis("equal")
-fig6.savefig(os.path.join(RESULTS_DIR, 'basic_tx_06_constellation.png'), dpi=150, bbox_inches='tight')
+fig6.savefig(os.path.join(RESULTS_DIR, 'basic_tx_07_constellation.png'), dpi=150, bbox_inches='tight')
 plt.close(fig6)
 
 # -------------------------------
