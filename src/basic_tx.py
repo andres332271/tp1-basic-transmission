@@ -156,7 +156,7 @@ ax3.set_xlabel("Frecuencia [GHz]")
 ax3.set_ylabel("PSD [dB]")
 ax3.set_title("PSD a la entrada del filtro — método de Welch")
 ax3.set_xlim(-BR/1e9, BR/1e9)
-ax3.set_ylim(-80, 5)
+ax3.set_ylim(-100, 5)
 ax3.grid(True)
 plt.tight_layout()
 fig3.savefig(os.path.join(RESULTS_DIR, 'basic_tx_03_psd_input.png'), dpi=150, bbox_inches='tight')
@@ -190,7 +190,7 @@ for h, yup, fname_suffix, filter_name in [
     ax.set_ylabel("PSD [dB]")
     ax.set_title(f"PSD salida vs |H(f)|² — {filter_name} (β={rolloff})")
     ax.set_xlim(-BR/1e9, BR/1e9)
-    ax.set_ylim(-80, 5)
+    ax.set_ylim(-100, 5)
     ax.legend()
     ax.grid(True)
     plt.tight_layout()
@@ -214,16 +214,16 @@ def eye_diagram(sig, sps, title, num_traces=200, levels=None, save_path=None):
         ax.plot(trace, alpha=0.3, color='steelblue')
     # Instantes de muestreo óptimos
     for x in range(0, 2*sps + 1, sps):
-        ax.axvline(x, color='tomato', linestyle='--', linewidth=1.4,
+        ax.axvline(x, color='tomato', linestyle='--', linewidth=1.2,
                    label='Instante de muestreo' if x == 0 else None)
     # Niveles de símbolo de la constelación
     if levels is not None:
         for y in levels:
-            ax.axhline(y, color='black', linestyle='--', linewidth=1.4,
+            ax.axhline(y, color='black', linestyle='-.', linewidth=1.0,
                        label='Nivel de símbolo' if y == levels[0] else None)
     ax.set_title(title)
     ax.set_xlabel("Muestra")
-    ax.set_xlim(0, span - 1)
+    ax.set_xlim(0 - 0.2, span - 1 + 0.2)
     ax.legend(fontsize=8, loc='lower right')
     ax.grid(True)
     if save_path:
