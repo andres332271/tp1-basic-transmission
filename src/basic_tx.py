@@ -122,30 +122,33 @@ save_time_domain(yup_rc,  f"RC",  'basic_tx_01_time_domain_rc.png')
 save_time_domain(yup_rrc, f"RRC", 'basic_tx_02_time_domain_rrc.png')
 
 # -------------------------------
-# PSD helpers (normalización a 0 dB en f=0)
+# PSD helpers
 # -------------------------------
 NFFT = 1024 * 8
 
-def welch_normalized_dB(sig, sample_rate, nperseg):
+def welch_psd(sig, sample_rate, nperseg):
+    """Devuelve frecuencia y PSD crudas (fftshift aplicado, sin normalizar)."""
     f_w, Pxx = signal.welch(sig, sample_rate, nperseg=nperseg, return_onesided=False)
-    f_w = fftshift(f_w)
-    Pxx = fftshift(Pxx)
-    f0_idx = np.argmin(np.abs(f_w))
-    Pxx_dB = 10 * np.log10(Pxx / Pxx[f0_idx])
-    return f_w, Pxx_dB
+    return fftshift(f_w), fftshift(Pxx)
 
 def h_squared_dB(h, n_fft, sample_rate):
     H = np.abs(fft(h, n_fft))
     H_sq = H**2
-    # DC en índice 0, normalizado por sum(h)=H(0)=1, así que H_sq[0]=1
+    # sum(h)=H(0)=1 por normalización del filtro → H_sq[0]=1 → 0 dB en DC
     H_sq_dB = 10 * np.log10(np.maximum(H_sq / H_sq[0], 1e-10))
     f_h = fftshift(fftfreq(n_fft, 1/sample_rate))
     return f_h, fftshift(H_sq_dB)
 
 # -------------------------------
 # Point 3: PSD a la entrada del filtro (xup)
+# La entrada es blanca → PSD plana. Normalizamos por la media de la PSD,
+# que estima el nivel real del espectro plano sin depender del bin de DC
+# (scipy.signal.welch suprime DC por defecto con detrend='constant').
+# Este mismo factor se reutiliza en el punto 4 para comparar directamente.
 # -------------------------------
-f_in, Pxx_in_dB = welch_normalized_dB(xup, fs, nperseg=NFFT//4)
+f_in, Pxx_in = welch_psd(xup, fs, nperseg=NFFT//4)
+psd_norm = np.mean(Pxx_in)          # nivel plano de la entrada → referencia 0 dB
+Pxx_in_dB = 10 * np.log10(Pxx_in / psd_norm)
 
 fig3, ax3 = plt.subplots(figsize=(10, 5))
 ax3.plot(f_in/1e9, Pxx_in_dB)
@@ -153,7 +156,7 @@ ax3.set_xlabel("Frecuencia [GHz]")
 ax3.set_ylabel("PSD [dB]")
 ax3.set_title("PSD a la entrada del filtro — método de Welch")
 ax3.set_xlim(-BR/1e9, BR/1e9)
-ax3.set_ylim(-20, 5)
+ax3.set_ylim(-80, 5)
 ax3.grid(True)
 plt.tight_layout()
 fig3.savefig(os.path.join(RESULTS_DIR, 'basic_tx_03_psd_input.png'), dpi=150, bbox_inches='tight')
@@ -161,12 +164,15 @@ plt.close(fig3)
 
 # -------------------------------
 # Point 4: PSD a la salida del filtro + |H(f)|²  (RC y RRC)
+# Se usa psd_norm (nivel plano de la entrada) para normalizar la salida,
+# de modo que PSD_salida/psd_norm ≈ |H(f)|² directamente.
 # -------------------------------
 for h, yup, fname_suffix, filter_name in [
     (h_rc,  yup_rc,  'rc',  'RC'),
     (h_rrc, yup_rrc, 'rrc', 'RRC'),
 ]:
-    f_out, Pxx_out_dB = welch_normalized_dB(yup, fs, nperseg=NFFT//4)
+    f_out, Pxx_out = welch_psd(yup, fs, nperseg=NFFT//4)
+    Pxx_out_dB = 10 * np.log10(Pxx_out / psd_norm)
     f_h,   H_sq_dB   = h_squared_dB(h, NFFT, fs)
 
     f_nyq = BR / 2 / 1e9
