@@ -10,14 +10,16 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy import signal
-from numpy.fft import fft, fftshift
+from numpy.fft import fft, fftshift, fftfreq
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from filters import raised_cosine, root_raised_cosine
 
 plt.close('all')
 
-RESULTS_DIR = 'results'
+RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'results'))
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Capture stdout to text file
 _log_lines = []
 
 def log(msg=''):
@@ -30,9 +32,9 @@ def log(msg=''):
 L = 10000          # Simulation Length
 BR = 32e9          # Baud Rate
 N = 4              # Oversampling rate
-rolloff = 0.1      # Pulse shaping rolloff
+rolloff = 0.5      # Pulse shaping rolloff
 h_taps = 101       # Pulse shaping taps
-M = 16              # Modulation order. QPSK (QAM4): M=4 y QAM-16: M=16
+M = 16             # Modulation order. QPSK (QAM4): M=4, QAM-16: M=16
 
 fs = N * BR        # Sampling rate
 T = 1 / BR         # Symbol period
@@ -74,103 +76,124 @@ xup = np.zeros(L*N, dtype=complex)
 xup[::N] = ak * N
 
 # -------------------------------
-# Raised Cosine Filter
+# Filters
 # -------------------------------
-def raised_cosine(beta, span, sps):
-    t = np.arange(-span//2, span//2 + 1) / sps
-    h = np.zeros_like(t)
+h_rc  = raised_cosine(BR/2, fs, rolloff, h_taps)
+h_rrc = root_raised_cosine(BR/2, fs, rolloff, h_taps)
+h_delay = (len(h_rc) - 1) // 2
 
-    for i in range(len(t)):
-        if t[i] == 0.0:
-            h[i] = 1.0
-        elif beta != 0 and abs(t[i]) == 1/(2*beta):
-            h[i] = (np.pi/4)*np.sinc(1/(2*beta))
-        else:
-            h[i] = (np.sinc(t[i]) *
-                    np.cos(np.pi*beta*t[i]) /
-                    (1 - (2*beta*t[i])**2))
-    return h/np.sum(h)
-
-h = raised_cosine(rolloff, h_taps, N)
-h_delay = (h_taps - 1) // 2
-
-log(f"RC filter taps: {len(h)}, delay: {h_delay} samples")
+log(f"RC  filter: {len(h_rc)} taps, delay {h_delay} samples")
+log(f"RRC filter: {len(h_rrc)} taps, delay {h_delay} samples")
 log()
 
-yup = signal.lfilter(h, 1, np.concatenate([xup, np.zeros(h_delay)]))
-yup = yup[h_delay+1:]
+def apply_filter(h, xup, h_delay):
+    y = signal.lfilter(h, 1, np.concatenate([xup, np.zeros(h_delay)]))
+    return y[h_delay:]
+
+yup_rc  = apply_filter(h_rc,  xup, h_delay)
+yup_rrc = apply_filter(h_rrc, xup, h_delay)
 
 # -------------------------------
-# Time domain plot
+# Point 1 & 2: Time domain plots
+# s(t) via plot(), symbols via stem()
 # -------------------------------
-t_symbols = np.arange(L) * T
-t_samples = np.arange(len(yup)) * Ts
-LPLOT = 30 * N
+t_symbols = np.arange(30) * T * BR       # normalized: t·BR
+t_samples = np.arange(30 * N) * Ts * BR  # normalized: t·BR
 
-fig1, axes = plt.subplots(2, 1, figsize=(6, 6))
+def save_time_domain(yup, filter_name, filename):
+    fig, axes = plt.subplots(2, 1, figsize=(10, 6))
+    for ax, part, label in zip(axes,
+                                [np.real, np.imag],
+                                ['Real', 'Imag']):
+        ax.plot(t_samples, part(yup[:30*N]), '-x', label=f"s(t) — {filter_name}")
+        ax.stem(t_symbols, part(ak[:30]),
+                linefmt='r-', markerfmt='ro', basefmt=" ", label="Símbolos TX")
+        ax.set_xlabel("Tiempo normalizado (t · BR)")
+        ax.set_title(f"TX {label} — {filter_name} (β={rolloff})")
+        ax.legend()
+        ax.grid(True)
+    plt.tight_layout()
+    fig.savefig(os.path.join(RESULTS_DIR, filename), dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
-axes[0].plot(t_samples[:LPLOT], np.real(yup[:LPLOT]), '-x', label="Filtered signal")
-axes[0].stem(t_symbols[:30], np.real(ak[:30]),
-             linefmt='r-', markerfmt='ro', basefmt=" ", label="Tx symbols")
-axes[0].set_title("TX Real Part")
-axes[0].legend()
-axes[0].grid(True)
-
-axes[1].plot(t_samples[:LPLOT], np.imag(yup[:LPLOT]), '-x', label="Filtered signal")
-axes[1].stem(t_symbols[:30], np.imag(ak[:30]),
-             linefmt='r-', markerfmt='ro', basefmt=" ", label="Tx symbols")
-axes[1].set_title("TX Imag Part")
-axes[1].legend()
-axes[1].grid(True)
-
-plt.tight_layout()
-fig1.savefig(os.path.join(RESULTS_DIR, 'basic_tx_01_time_domain.png'), dpi=150, bbox_inches='tight')
-plt.close(fig1)
+# Point 1: RC
+save_time_domain(yup_rc,  f"RC",  'basic_tx_01_time_domain_rc.png')
+# Point 2: RRC
+save_time_domain(yup_rrc, f"RRC", 'basic_tx_02_time_domain_rrc.png')
 
 # -------------------------------
-# Filter Frequency Response
+# PSD helpers (normalización a 0 dB en f=0)
 # -------------------------------
-NFFT = 1024*8
-H_abs = np.abs(fft(h, NFFT))
-f = np.linspace(-fs/2, fs/2, NFFT)
+NFFT = 1024 * 8
 
-fig2, ax2 = plt.subplots(figsize=(8, 5))
-ax2.plot(f/1e9, fftshift(20*np.log10(H_abs/np.max(H_abs))))
-ax2.set_title("Filter Frequency Response (dB)")
-ax2.set_xlabel("Frequency [GHz]")
-ax2.grid(True)
-fig2.savefig(os.path.join(RESULTS_DIR, 'basic_tx_02_filter_freq_db.png'), dpi=150, bbox_inches='tight')
-plt.close(fig2)
+def welch_normalized_dB(sig, sample_rate, nperseg):
+    f_w, Pxx = signal.welch(sig, sample_rate, nperseg=nperseg, return_onesided=False)
+    f_w = fftshift(f_w)
+    Pxx = fftshift(Pxx)
+    f0_idx = np.argmin(np.abs(f_w))
+    Pxx_dB = 10 * np.log10(Pxx / Pxx[f0_idx])
+    return f_w, Pxx_dB
 
-fig3, ax3 = plt.subplots(figsize=(8, 5))
-ax3.plot(h)
-ax3.set_title("Filter Impulse Response")
-ax3.set_xlabel("Samples")
+def h_squared_dB(h, n_fft, sample_rate):
+    H = np.abs(fft(h, n_fft))
+    H_sq = H**2
+    # DC en índice 0, normalizado por sum(h)=H(0)=1, así que H_sq[0]=1
+    H_sq_dB = 10 * np.log10(np.maximum(H_sq / H_sq[0], 1e-10))
+    f_h = fftshift(fftfreq(n_fft, 1/sample_rate))
+    return f_h, fftshift(H_sq_dB)
+
+# -------------------------------
+# Point 3: PSD a la entrada del filtro (xup)
+# -------------------------------
+f_in, Pxx_in_dB = welch_normalized_dB(xup, fs, nperseg=NFFT//4)
+
+fig3, ax3 = plt.subplots(figsize=(10, 5))
+ax3.plot(f_in/1e9, Pxx_in_dB)
+ax3.set_xlabel("Frecuencia [GHz]")
+ax3.set_ylabel("PSD [dB]")
+ax3.set_title("PSD a la entrada del filtro — método de Welch")
+ax3.set_xlim(-BR/1e9, BR/1e9)
+ax3.set_ylim(-20, 5)
 ax3.grid(True)
-fig3.savefig(os.path.join(RESULTS_DIR, 'basic_tx_03_filter_impulse.png'), dpi=150, bbox_inches='tight')
+plt.tight_layout()
+fig3.savefig(os.path.join(RESULTS_DIR, 'basic_tx_03_psd_input.png'), dpi=150, bbox_inches='tight')
 plt.close(fig3)
 
 # -------------------------------
-# PSD using Welch
+# Point 4: PSD a la salida del filtro + |H(f)|²  (RC y RRC)
 # -------------------------------
-fig4, ax4 = plt.subplots(figsize=(10, 5))
+for h, yup, fname_suffix, filter_name in [
+    (h_rc,  yup_rc,  'rc',  'RC'),
+    (h_rrc, yup_rrc, 'rrc', 'RRC'),
+]:
+    f_out, Pxx_out_dB = welch_normalized_dB(yup, fs, nperseg=NFFT//4)
+    f_h,   H_sq_dB   = h_squared_dB(h, NFFT, fs)
 
-f1, Pxx1 = signal.welch(ak, BR, nperseg=NFFT//2, return_onesided=False)
-f3, Pxx3 = signal.welch(xup, fs, nperseg=NFFT//4, return_onesided=False)
-f2, Pxx2 = signal.welch(yup, fs, nperseg=NFFT//4, return_onesided=False)
+    f_nyq = BR / 2 / 1e9
+    f_bw  = BR / 2 * (1 + rolloff) / 1e9
 
-ax4.plot(fftshift(f1)/1e9, fftshift(10*np.log10(Pxx1/np.max(Pxx1))), label="PSD symbols")
-ax4.plot(fftshift(f2)/1e9, fftshift(10*np.log10(Pxx2/np.max(Pxx2))), label="PSD filtered")
-ax4.plot(fftshift(f3)/1e9, fftshift(10*np.log10(Pxx3/np.max(Pxx3))), label="PSD xup")
-ax4.legend()
-ax4.set_xlabel("Frequency [GHz]")
-ax4.set_ylabel("PSD [dB]")
-ax4.grid(True)
-fig4.savefig(os.path.join(RESULTS_DIR, 'basic_tx_04_psd_welch.png'), dpi=150, bbox_inches='tight')
-plt.close(fig4)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(f_out/1e9, Pxx_out_dB,     label=f"PSD salida filtro {filter_name}")
+    ax.plot(f_h/1e9,   H_sq_dB, '--',  label=f"|H_{filter_name}(f)|²")
+    for sign in (+1, -1):
+        ax.axvline(sign * f_nyq, color='steelblue', linestyle='--', linewidth=1.6,
+                   label=f'±BR/2 = ±{f_nyq:.0f} GHz' if sign == 1 else None)
+        ax.axvline(sign * f_bw,  color='tomato',    linestyle='--', linewidth=1.6,
+                   label=f'±BR/2·(1+β) = ±{f_bw:.0f} GHz' if sign == 1 else None)
+    ax.set_xlabel("Frecuencia [GHz]")
+    ax.set_ylabel("PSD [dB]")
+    ax.set_title(f"PSD salida vs |H(f)|² — {filter_name} (β={rolloff})")
+    ax.set_xlim(-BR/1e9, BR/1e9)
+    ax.set_ylim(-80, 5)
+    ax.legend()
+    ax.grid(True)
+    plt.tight_layout()
+    fig.savefig(os.path.join(RESULTS_DIR, f'basic_tx_04_psd_output_vs_h2_{fname_suffix}.png'),
+                dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
 # -------------------------------
-# Eye Diagram
+# Eye Diagram (RC)
 # -------------------------------
 def eye_diagram(sig, sps, num_symbols=200, save_path=None):
     samples = sps * 2
@@ -178,22 +201,23 @@ def eye_diagram(sig, sps, num_symbols=200, save_path=None):
     reshaped = truncated.reshape((-1, samples))
     fig, ax = plt.subplots()
     for row in reshaped:
-        ax.plot(np.real(row), alpha=0.3)
-    ax.set_title("Eye Diagram")
+        ax.plot(np.real(row), alpha=0.3, color='steelblue')
+    ax.set_title(f"Diagrama de ojo — RC (β={rolloff})")
+    ax.set_xlabel("Muestra")
     ax.grid(True)
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-eye_diagram(yup[500:5000], N,
+eye_diagram(yup_rc[500:5000], N,
             save_path=os.path.join(RESULTS_DIR, 'basic_tx_05_eye_diagram.png'))
 
 # -------------------------------
-# Constellation Diagram
+# Constellation TX
 # -------------------------------
 fig6, ax6 = plt.subplots(figsize=(6, 6))
 ax6.scatter(np.real(ak), np.imag(ak), s=5, alpha=0.5)
-ax6.set_title("TX Constellation (16-QAM)")
+ax6.set_title(f"Constelación TX ({M}-QAM)")
 ax6.set_xlabel("In-Phase (I)")
 ax6.set_ylabel("Quadrature (Q)")
 ax6.grid(True)
