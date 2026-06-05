@@ -14,6 +14,7 @@ from numpy.fft import fft, fftshift, fftfreq
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from filters import raised_cosine, root_raised_cosine
+from tools import qammod, welch_psd, eye_diagram
 
 plt.close('all')
 
@@ -56,12 +57,6 @@ log()
 # QAM MODULATION (Gray mapping)
 # -------------------------------
 x_aux = np.random.randint(0, M, L)
-
-def qammod(symbols, M):
-    m = int(np.sqrt(M))
-    re = 2*(symbols % m) - m + 1
-    im = 2*(symbols // m) - m + 1
-    return (re + 1j*im)
 
 ak = qammod(x_aux, M)
 
@@ -125,11 +120,6 @@ save_time_domain(yup_rrc, f"RRC", 'basic_tx_02_time_domain_rrc.png')
 # PSD helpers
 # -------------------------------
 NFFT = 1024 * 8
-
-def welch_psd(sig, sample_rate, nperseg):
-    """Devuelve frecuencia y PSD crudas (fftshift aplicado, sin normalizar)."""
-    f_w, Pxx = signal.welch(sig, sample_rate, nperseg=nperseg, return_onesided=False)
-    return fftshift(f_w), fftshift(Pxx)
 
 def h_squared_dB(h, n_fft, sample_rate):
     H = np.abs(fft(h, n_fft))
@@ -201,35 +191,6 @@ for h, yup, fname_suffix, filter_name in [
 # -------------------------------
 # Eye Diagram
 # -------------------------------
-def eye_diagram(sig, sps, title, num_traces=200, levels=None, save_path=None):
-    # Cada traza cubre 2 períodos de símbolo + 1 muestra extra para que el
-    # eje horizontal vaya de 0 a 2*sps (inclusive) sin recorte.
-    # Las trazas se extraen con ventanas solapadas que avanzan de a sps.
-    span = sps * 2 + 1
-    traces = [np.real(sig[i*sps : i*sps + span])
-              for i in range(num_traces)
-              if i*sps + span <= len(sig)]
-    fig, ax = plt.subplots(figsize=(7, 4))
-    for trace in traces:
-        ax.plot(trace, alpha=0.3, color='steelblue')
-    # Instantes de muestreo óptimos
-    for x in range(0, 2*sps + 1, sps):
-        ax.axvline(x, color='tomato', linestyle='--', linewidth=1.2,
-                   label='Instante de muestreo' if x == 0 else None)
-    # Niveles de símbolo de la constelación
-    if levels is not None:
-        for y in levels:
-            ax.axhline(y, color='black', linestyle='-.', linewidth=1.0,
-                       label='Nivel de símbolo' if y == levels[0] else None)
-    ax.set_title(title)
-    ax.set_xlabel("Muestra")
-    ax.set_xlim(0 - 0.2, span - 1 + 0.2)
-    ax.legend(fontsize=8, loc='lower right')
-    ax.grid(True)
-    if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-
 # Niveles reales del alfabeto QAM (parte real de los símbolos)
 m = int(np.sqrt(M))
 sym_levels = sorted({2*(k % m) - m + 1 for k in range(M)})
