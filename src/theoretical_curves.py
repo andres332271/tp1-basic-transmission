@@ -11,6 +11,12 @@ from tools import ber_mqam, simulate_txrx
 RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'results'))
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
+_log_lines = []
+
+def log(msg=''):
+    print(msg)
+    _log_lines.append(msg)
+
 # -------------------------------------------------
 # Parámetros de simulación para el barrido
 # -------------------------------------------------
@@ -28,21 +34,30 @@ SWEEP = {
 colors = {4: '#1f77b4', 16: '#ff7f0e'}
 labels = {4: 'QPSK', 16: '16-QAM'}
 
+log("=== BER Sweep Parameters ===")
+log(f"N       = {N}")
+log(f"rolloff = {rolloff}")
+log(f"h_taps  = {h_taps}")
+log(f"L_sweep = {L_sweep:,} symbols")
+log(f"SWEEP   = {SWEEP}")
+log()
+
 # -------------------------------------------------
 # Barrido de simulación
 # -------------------------------------------------
 sim_results = {}
 for M_val, ebno_points in SWEEP.items():
-    print(f"\n[{labels[M_val]}] Barrido Eb/N0: {ebno_points} dB  (L={L_sweep:,})")
+    log(f"[{labels[M_val]}] Eb/N0: {ebno_points} dB")
     pts = []
     for ebn0 in ebno_points:
         res = simulate_txrx(M=M_val, L=L_sweep, N=N,
                             rolloff=rolloff, h_taps=h_taps, EbNo_db=ebn0)
         ber = res['ber_sim']
-        print(f"  Eb/N0 = {ebn0:5.1f} dB  →  BER = {ber:.2e}  ({res['n_errors']} errores)")
+        log(f"  Eb/N0 = {ebn0:5.1f} dB  BER_sim = {ber:.2e}  BER_teo = {ber_mqam(ebn0, M_val):.2e}  ({res['n_errors']} errores)")
         if ber > 0:
             pts.append((ebn0, ber))
     sim_results[M_val] = pts
+    log()
 
 # -------------------------------------------------
 # Plot: curvas teóricas + puntos simulados
@@ -77,4 +92,10 @@ plt.tight_layout()
 fig.savefig(os.path.join(RESULTS_DIR, 'theo_curves_01_ber.png'), dpi=150, bbox_inches='tight')
 plt.close(fig)
 
-print(f"\nFigura guardada: {os.path.join(RESULTS_DIR, 'theo_curves_01_ber.png')}")
+log("=== Output files saved ===")
+for fname in sorted(os.listdir(RESULTS_DIR)):
+    if fname.startswith('theo_curves'):
+        log(f"  {os.path.join(RESULTS_DIR, fname)}")
+
+with open(os.path.join(RESULTS_DIR, 'theo_curves_output.txt'), 'w') as f_out:
+    f_out.write('\n'.join(_log_lines) + '\n')
