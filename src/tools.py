@@ -1,8 +1,13 @@
+import os
+import sys
 import numpy as np
 from numpy.fft import fftshift
-from scipy.signal import welch as _welch
+from scipy.signal import welch as _welch, lfilter
 from scipy.special import erfc
 import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from filters import root_raised_cosine as _rrc
 
 
 def qammod(x, M):
@@ -34,6 +39,59 @@ def welch_psd(sig, sample_rate, nperseg):
     """Devuelve (f, Pxx) con fftshift aplicado, sin normalizar."""
     f_w, Pxx = _welch(sig, sample_rate, nperseg=nperseg, return_onesided=False)
     return fftshift(f_w), fftshift(Pxx)
+
+
+def simulate_txrx(M, L, N, rolloff, h_taps, EbNo_db, BR=32e9):
+    """Pipeline completo TX→AWGN→MF→slicer. Devuelve dict con señales y métricas."""
+    # QAM modulator + upsampling
+    ak  = qammod(np.random.randint(0, M, L), M)
+    xup = np.zeros(L * N, dtype=complex)
+    xup[::N] = ak * N
+
+    # RRC TX filter
+    h       = _rrc(BR/2, N*BR, rolloff, h_taps)
+    h_delay = (len(h) - 1) // 2
+    yup     = lfilter(h, 1, np.concatenate([xup, np.zeros(h_delay)]))[h_delay:]
+
+    # Canal AWGN
+    k_bits  = np.log2(M)
+    SNR_ch  = 10**(EbNo_db / 10) * k_bits / N
+    Pn      = np.var(yup) / SNR_ch
+    noise   = np.sqrt(Pn / 2) * (np.random.randn(len(yup)) + 1j * np.random.randn(len(yup)))
+    rx      = yup + noise
+
+    # Matched filter + decimación
+    ymf     = lfilter(np.conj(h[::-1]), 1, np.concatenate([rx, np.zeros(h_delay)]))[h_delay:]
+    rx_down = ymf[::N]
+
+    # Normalización antes del slicer
+    norm_factor = N * np.sum(h**2)
+    rx_norm     = rx_down / norm_factor
+
+    # Compensación de delay
+    delay_est = estimate_delay(ak, rx_norm)
+    if delay_est > 0:
+        rx_aligned, tx_aligned = rx_norm[delay_est:], ak[:len(rx_norm) - delay_est]
+    elif delay_est < 0:
+        rx_aligned, tx_aligned = rx_norm[:len(ak) + delay_est], ak[-delay_est:]
+    else:
+        rx_aligned, tx_aligned = rx_norm, ak[:len(rx_norm)]
+
+    # Slicer + BER (60% final para descartar transitorios)
+    ak_hat   = slicer(rx_aligned, M)
+    start    = int(0.4 * len(ak_hat))
+    n_errors = int(np.sum(ak_hat[start:] != tx_aligned[start:]))
+    ser_sim  = n_errors / len(ak_hat[start:])
+    ber_sim  = ser_sim / k_bits
+
+    return {
+        'ak': ak, 'xup': xup, 'yup': yup,
+        'rx': rx, 'ymf': ymf,
+        'rx_norm': rx_norm,
+        'h': h, 'h_delay': h_delay, 'norm_factor': norm_factor,
+        'delay_est': delay_est,
+        'ber_sim': ber_sim, 'ser_sim': ser_sim, 'n_errors': n_errors,
+    }
 
 
 def eye_diagram(sig, sps, title, num_traces=200, levels=None, save_path=None):

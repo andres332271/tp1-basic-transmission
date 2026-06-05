@@ -5,12 +5,10 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from scipy.signal import lfilter
-from numpy.fft import fft, fftshift, fftfreq
+from numpy.fft import fftshift
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from filters import root_raised_cosine
-from tools import qammod, slicer, estimate_delay, ber_mqam, welch_psd, eye_diagram
+from tools import ber_mqam, simulate_txrx, welch_psd, eye_diagram
 
 RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'results'))
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -41,9 +39,7 @@ h_taps  = args.h_taps
 EbNo_db = args.EbNo
 BR      = 32e9   # fijo por enunciado
 
-T  = 1 / BR
 fs = N * BR
-Ts = 1 / fs
 
 log("=== Basic TX-RX Parameters ===")
 log(f"M        = {M}-QAM")
@@ -57,91 +53,29 @@ log(f"fs       = {fs/1e9:.1f} GHz")
 log()
 
 # -------------------------------------------------
-# QAM Modulator
+# Simulación completa (núcleo compartido con theoretical_curves.py)
 # -------------------------------------------------
-x_aux = np.random.randint(0, M, L)
-ak = qammod(x_aux, M)
+res = simulate_txrx(M, L, N, rolloff, h_taps, EbNo_db, BR)
 
-# -------------------------------------------------
-# Upsampling
-# -------------------------------------------------
-xup = np.zeros(L * N, dtype=complex)
-xup[::N] = ak * N
+ak          = res['ak']
+xup         = res['xup']
+yup         = res['yup']
+rx          = res['rx']
+ymf         = res['ymf']
+rx_norm     = res['rx_norm']
+h           = res['h']
+h_delay     = res['h_delay']
+norm_factor = res['norm_factor']
+ber_sim     = res['ber_sim']
+ser_sim     = res['ser_sim']
+n_errors    = res['n_errors']
+delay_est   = res['delay_est']
 
-# -------------------------------------------------
-# RRC TX filter
-# -------------------------------------------------
-h = root_raised_cosine(BR/2, fs, rolloff, h_taps)
-h_delay = (len(h) - 1) // 2
-
-log(f"h_delay  = {h_delay} samples")
-
-yup = lfilter(h, 1, np.concatenate([xup, np.zeros(h_delay)]))
-yup = yup[h_delay:]
-
-# -------------------------------------------------
-# Channel AWGN
-# -------------------------------------------------
-k_bits  = np.log2(M)
-EbNo    = 10**(EbNo_db / 10)
-SNR_slc = EbNo * k_bits
-SNR_ch  = SNR_slc / N
-
-Ps    = np.var(yup)
-Pn    = Ps / SNR_ch
-noise = np.sqrt(Pn / 2) * (np.random.randn(len(yup)) + 1j * np.random.randn(len(yup)))
-rx    = yup + noise
-
-# -------------------------------------------------
-# RX: matched filter + decimation
-# -------------------------------------------------
-h_mf = np.conj(h[::-1])
-ymf  = lfilter(h_mf, 1, np.concatenate([rx, np.zeros(h_delay)]))
-ymf  = ymf[h_delay:]
-
-PHASE   = 0   # picos en k·N tras compensación de delay en TX y MF
-rx_down = ymf[PHASE::N]
-
-# -------------------------------------------------
-# Normalización antes del slicer
-# La ganancia del cascade RRC→MF en el instante de muestreo es N·Σh²:
-# N del upsampling, Σh² de la autocorrelación del filtro en lag cero.
-# -------------------------------------------------
-norm_factor = N * np.sum(h**2)
-rx_norm     = rx_down / norm_factor
-
+log(f"h_delay     = {h_delay} samples")
 log(f"Norm factor = {norm_factor:.4f}  (N·Σh² = {N}·{np.sum(h**2):.4f})")
-
-# -------------------------------------------------
-# Delay estimation and compensation
-# -------------------------------------------------
-delay_est = estimate_delay(ak, rx_norm)
-log(f"Estimated symbol delay = {delay_est}")
-
-if delay_est > 0:
-    rx_aligned = rx_norm[delay_est:]
-    tx_aligned = ak[:len(rx_aligned)]
-elif delay_est < 0:
-    tx_aligned = ak[-delay_est:]
-    rx_aligned = rx_norm[:len(tx_aligned)]
-else:
-    rx_aligned = rx_norm
-    tx_aligned = ak[:len(rx_aligned)]
-
-# -------------------------------------------------
-# Slicer + BER
-# -------------------------------------------------
-ak_hat = slicer(rx_aligned, M)
-
-use_frac   = 0.6
-start      = int((1 - use_frac) * len(ak_hat))
-n_errors   = np.sum(ak_hat[start:] != tx_aligned[start:])
-ser_sim    = n_errors / len(ak_hat[start:])
-ber_sim    = ser_sim / np.log2(M)
-ber_theo   = ber_mqam(EbNo_db, M)
-
+log(f"Symbol delay est. = {delay_est}")
 log()
-log(f"Theo BER = {ber_theo:.2e}")
+log(f"Theo BER = {ber_mqam(EbNo_db, M):.2e}")
 log(f"Sim  SER = {ser_sim:.2e}")
 log(f"Sim  BER = {ber_sim:.2e}")
 log(f"Errors   = {n_errors}")
@@ -149,12 +83,12 @@ log(f"Errors   = {n_errors}")
 # -------------------------------------------------
 # PSD helpers (compartidos por plots 02 y 03)
 # -------------------------------------------------
-NFFT   = 1024 * 8
-f_nyq  = BR / 2 / 1e9
-f_bw   = BR / 2 * (1 + rolloff) / 1e9
+NFFT  = 1024 * 8
+f_nyq = BR / 2 / 1e9
+f_bw  = BR / 2 * (1 + rolloff) / 1e9
 
 _, Pxx_xup = welch_psd(xup, fs, NFFT // 4)
-psd_norm   = np.mean(Pxx_xup)   # referencia 0 dB: espectro plano de la entrada blanca
+psd_norm   = np.mean(Pxx_xup)
 
 def bw_lines(ax):
     for sign in (+1, -1):
@@ -224,12 +158,7 @@ ax.plot(np.real(pts), np.imag(pts), 'o', markersize=2, alpha=0.5)
 ax.set_xlabel('In-Phase (I)')
 ax.set_ylabel('Quadrature (Q)')
 ax.set_title(f'Constelación RX — {M}-QAM, Eb/N0 = {EbNo_db:.0f} dB')
-if M == 4:
-    LIM = 2
-elif M == 16:
-    LIM = 5
-else:
-    LIM = 9
+LIM = 2 if M == 4 else (5 if M == 16 else 9)
 ax.set_xlim([-LIM, LIM])
 ax.set_ylim([-LIM, LIM])
 ax.set_aspect('equal')
