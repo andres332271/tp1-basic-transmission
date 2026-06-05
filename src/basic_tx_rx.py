@@ -61,7 +61,10 @@ xup[::N] = ak * N
 # RRC TX filter
 # -------------------------------------------------
 h = root_raised_cosine(BR/2, fs, rolloff, h_taps)
-h_delay = 0
+h_delay = (len(h) - 1) // 2
+
+log(f"h_delay  = {h_delay} samples")
+log()
 
 yup = lfilter(h, 1, np.concatenate([xup, np.zeros(h_delay)]))
 yup = yup[h_delay:]
@@ -86,23 +89,34 @@ h_mf  = np.conj(h[::-1])
 ymf   = lfilter(h_mf, 1, np.concatenate([rx, np.zeros(h_delay)]))
 ymf   = ymf[h_delay:]
 
-PHASE    = 0
+PHASE    = 0   # los picos ya están alineados en k·N tras la compensación de delay
 rx_down  = ymf[PHASE::N]
+
+# -------------------------------------------------
+# Normalización antes del slicer
+# La ganancia del cascade TX-RRC → MF-RRC en el instante de muestreo es
+# N * sum(h²): el factor N viene del upsampling, sum(h²) de la correlación
+# cruzada del filtro consigo mismo en el lag cero.
+# -------------------------------------------------
+norm_factor = N * np.sum(h**2)
+rx_norm = rx_down / norm_factor
+
+log(f"Norm factor = {norm_factor:.4f}  (N·Σh² = {N}·{np.sum(h**2):.4f})")
 
 # -------------------------------------------------
 # Delay estimation and compensation
 # -------------------------------------------------
-delay_est = estimate_delay(ak, rx_down)
+delay_est = estimate_delay(ak, rx_norm)
 log(f"Estimated symbol delay = {delay_est}")
 
 if delay_est > 0:
-    rx_aligned = rx_down[delay_est:]
+    rx_aligned = rx_norm[delay_est:]
     tx_aligned = ak[:len(rx_aligned)]
 elif delay_est < 0:
     tx_aligned = ak[-delay_est:]
-    rx_aligned = rx_down[:len(tx_aligned)]
+    rx_aligned = rx_norm[:len(tx_aligned)]
 else:
-    rx_aligned = rx_down
+    rx_aligned = rx_norm
     tx_aligned = ak[:len(rx_aligned)]
 
 # -------------------------------------------------
@@ -129,7 +143,7 @@ log(f"Errors   = {n_errors}")
 # -------------------------------------------------
 # Constellation plot
 # -------------------------------------------------
-pts = rx_down[500:-100]
+pts = rx_norm[500:-100]
 fig, ax = plt.subplots(figsize=(6, 6))
 ax.plot(np.real(pts), np.imag(pts), 'o', markersize=2, alpha=0.5)
 ax.set_xlabel('In-Phase (I)')
