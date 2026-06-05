@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -20,15 +21,24 @@ def log(msg=''):
     _log_lines.append(msg)
 
 # -------------------------------------------------
-# Parameters
+# Parameters (CLI o defaults)
 # -------------------------------------------------
-M        = 16
-L        = int(1e4)   # aumentar L para Eb/N0 altos
-BR       = 32e9
-N        = 2
-rolloff  = 0.1
-h_taps   = 203
-EbNo_db  = 10
+parser = argparse.ArgumentParser(description='Simulador TX-RX M-QAM con filtro RRC y canal AWGN')
+parser.add_argument('--M',       type=int,   default=16,      help='Orden de modulación (4=QPSK, 16=QAM16)')
+parser.add_argument('--L',       type=int,   default=10000,   help='Cantidad de símbolos')
+parser.add_argument('--N',       type=int,   default=2,       help='Tasa de sobremuestreo')
+parser.add_argument('--rolloff', type=float, default=0.1,     help='Rolloff del filtro RRC')
+parser.add_argument('--h_taps',  type=int,   default=203,     help='Cantidad de taps del filtro RRC')
+parser.add_argument('--EbNo',    type=float, default=10.0,    help='Eb/N0 deseado en dB')
+args = parser.parse_args()
+
+M        = args.M
+L        = args.L
+N        = args.N
+rolloff  = args.rolloff
+h_taps   = args.h_taps
+EbNo_db  = args.EbNo
+BR       = 32e9   # fijo por enunciado
 
 T  = 1 / BR
 fs = N * BR
