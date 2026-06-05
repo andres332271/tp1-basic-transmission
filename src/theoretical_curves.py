@@ -46,18 +46,21 @@ log()
 # Barrido de simulación
 # -------------------------------------------------
 sim_results = {}
+csv_rows = [['modulation', 'EbNo_dB', 'BER_sim', 'BER_teo', 'n_errors']]
+
 for M_val, ebno_points in SWEEP.items():
-    log(f"[{labels[M_val]}] Eb/N0: {ebno_points} dB")
+    print(f"[{labels[M_val]}] Eb/N0: {ebno_points} dB")
     pts = []
     for ebn0 in ebno_points:
         res = simulate_txrx(M=M_val, L=L_sweep, N=N,
                             rolloff=rolloff, h_taps=h_taps, EbNo_db=ebn0)
-        ber = res['ber_sim']
-        log(f"  Eb/N0 = {ebn0:5.1f} dB  BER_sim = {ber:.2e}  BER_teo = {ber_mqam(ebn0, M_val):.2e}  ({res['n_errors']} errores)")
+        ber     = res['ber_sim']
+        ber_teo = ber_mqam(ebn0, M_val)
+        print(f"  Eb/N0 = {ebn0:5.1f} dB  BER_sim = {ber:.2e}  BER_teo = {ber_teo:.2e}  ({res['n_errors']} errores)")
+        csv_rows.append([labels[M_val], ebn0, f"{ber:.6e}", f"{ber_teo:.6e}", res['n_errors']])
         if ber > 0:
             pts.append((ebn0, ber))
     sim_results[M_val] = pts
-    log()
 
 # -------------------------------------------------
 # Plot: curvas teóricas + puntos simulados
@@ -91,6 +94,12 @@ ax.grid(True, which='both')
 plt.tight_layout()
 fig.savefig(os.path.join(RESULTS_DIR, 'theo_curves_01_ber.png'), dpi=150, bbox_inches='tight')
 plt.close(fig)
+
+# CSV con resultados del barrido
+csv_path = os.path.join(RESULTS_DIR, 'theo_curves_ber_sweep.csv')
+with open(csv_path, 'w') as f_csv:
+    for row in csv_rows:
+        f_csv.write(','.join(str(v) for v in row) + '\n')
 
 log("=== Output files saved ===")
 for fname in sorted(os.listdir(RESULTS_DIR)):
