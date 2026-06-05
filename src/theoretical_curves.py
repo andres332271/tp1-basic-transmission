@@ -1,43 +1,32 @@
+import os
+import sys
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from scipy.special import erfc
 
-# -----------------------------
-# Funciones teóricas
-# -----------------------------
-def ber_qpsk(EbN0_dB):
-    EbN0 = 10**(EbN0_dB/10)
-    return 0.5 * erfc(np.sqrt(EbN0))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tools import ber_mqam
 
-def ber_mqam(EbN0_dB, M):
-    k = np.log2(M)
-    EbN0 = 10**(EbN0_dB/10)
-    return (4/k)*(1 - 1/np.sqrt(M)) * 0.5 * erfc(np.sqrt(3*k*EbN0/(2*(M-1))))
+RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'results'))
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# -----------------------------
-# Main
-# -----------------------------
+# -------------------------------------------------
+# Curvas teóricas de BER
+# -------------------------------------------------
 EbN0_dB = np.arange(0, 21, 0.5)
 
-# Teórico
-ber_qpsk_th = ber_qpsk(EbN0_dB)
-ber_16qam_th = ber_mqam(EbN0_dB, 16)
-ber_64qam_th = ber_mqam(EbN0_dB, 64)
+fig, ax = plt.subplots(figsize=(8, 5))
 
-# -----------------------------
-# Plot
-# -----------------------------
-plt.figure()
+ax.semilogy(EbN0_dB, ber_mqam(EbN0_dB, 4),  '--', label='QPSK (teórico)')
+ax.semilogy(EbN0_dB, ber_mqam(EbN0_dB, 16), '--', label='16-QAM (teórico)')
 
-plt.semilogy(EbN0_dB, ber_qpsk_th, '--', label='QPSK (teo)')
-plt.semilogy(EbN0_dB, ber_16qam_th, '--', label='16-QAM (teo)')
-plt.semilogy(EbN0_dB, ber_64qam_th, '--', label='64-QAM (teo)')
+ax.set_ylim([1e-6, 5e-2])
+ax.set_xlabel('Eb/N0 [dB]')
+ax.set_ylabel('BER')
+ax.set_title('BER vs Eb/N0 — Curvas teóricas')
+ax.legend()
+ax.grid(True, which='both')
 
-plt.ylim([1e-6, 5e-2])
-plt.grid(True, which='both')
-plt.xlabel('Eb/N0 (dB)')
-plt.ylabel('BER')
-plt.title('BER vs Eb/N0')
-plt.legend()
-
-plt.show()
+fig.savefig(os.path.join(RESULTS_DIR, 'theo_curves_01_ber.png'), dpi=150, bbox_inches='tight')
+plt.close(fig)

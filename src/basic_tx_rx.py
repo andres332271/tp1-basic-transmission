@@ -1,153 +1,100 @@
+import os
+import sys
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.signal import lfilter
-from scipy.special import erfc
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from filters import root_raised_cosine
+from tools import qammod, slicer, estimate_delay, ber_mqam
+
+RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'results'))
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+_log_lines = []
+
+def log(msg=''):
+    print(msg)
+    _log_lines.append(msg)
 
 # -------------------------------------------------
-# Basic TX QAM
+# Parameters
 # -------------------------------------------------
+M        = 16
+L        = int(1e4)   # aumentar L para Eb/N0 altos
+BR       = 32e9
+N        = 2
+rolloff  = 0.1
+h_taps   = 203
+EbNo_db  = 10
 
-enable_plots = True
-
-M = 16
-L = int(1e4) # -> TENER EN CUENTA PARA EbNo altos que sea lo suficientemente largo L
-BR = 32e9
-N = 2
-rolloff = 0.1
-h_taps = 203
-EbNo_db = 10
-
-T = 1/BR
+T  = 1 / BR
 fs = N * BR
-Ts = 1/fs
+Ts = 1 / fs
+
+log("=== Basic TX-RX Parameters ===")
+log(f"M        = {M}-QAM")
+log(f"L        = {L} symbols")
+log(f"BR       = {BR/1e9:.1f} GBd")
+log(f"N        = {N}")
+log(f"rolloff  = {rolloff}")
+log(f"h_taps   = {h_taps}")
+log(f"Eb/N0    = {EbNo_db} dB")
+log(f"fs       = {fs/1e9:.1f} GHz")
+log()
 
 # -------------------------------------------------
-# QAM Modulator (equivalente a qammod)
+# QAM Modulator
 # -------------------------------------------------
-
-def qammod(x, M):
-    m = int(np.sqrt(M))
-    re = 2*(x % m) - m + 1
-    im = 2*(x // m) - m + 1
-    return re + 1j*im
-
-# Símbolos
 x_aux = np.random.randint(0, M, L)
 ak = qammod(x_aux, M)
 
 # -------------------------------------------------
 # Upsampling
 # -------------------------------------------------
-
-xup = np.zeros(L*N, dtype=complex)
-xup[::N] = ak
-xup = N * xup   
+xup = np.zeros(L * N, dtype=complex)
+xup[::N] = ak * N
 
 # -------------------------------------------------
-# Filtro RRC
+# RRC TX filter
 # -------------------------------------------------
-def round_odd(n):
-    n = int(np.round(n))
-    if n % 2 == 0:
-        n += 1
-    return n
-
-def root_raised_cosine(fc, fs, rolloff, n_taps, t0=0):
-
-    Ts = 1 / fs
-    rolloff = rolloff + 0.0001
-    T = 1 / fc
-
-    # Force to odd
-    n_taps = round_odd(n_taps)
-
-    # Time vector
-    n = np.arange(-(n_taps - 1)//2, (n_taps - 1)//2 + 1)
-    t_v = n * Ts + t0
-    tn_v = t_v * 2 / T
-
-    # Filter taps 
-    numerator = (
-        np.sin(np.pi * (1 - rolloff) * tn_v)
-        + 4 * rolloff * tn_v * np.cos(np.pi * (1 + rolloff) * tn_v)
-    )
-
-    denominator = (
-        np.pi * tn_v * (1 - (4 * rolloff * tn_v)**2)
-    )
-
-    h_v = numerator / denominator
-
-    # Valor central (evita NaN en tn_v = 0)
-    center = (n_taps - 1) // 2
-    h_v[center] = (1 + rolloff * (4/np.pi - 1))
-
-    # Normalización
-    h_v = h_v / np.sum(h_v)
-
-    return h_v
-
-h = root_raised_cosine(BR/2, fs, rolloff, h_taps, 0)
-
-h_delay = 0  
+h = root_raised_cosine(BR/2, fs, rolloff, h_taps)
+h_delay = 0
 
 yup = lfilter(h, 1, np.concatenate([xup, np.zeros(h_delay)]))
 yup = yup[h_delay:]
 
 # -------------------------------------------------
-# Channel
+# Channel AWGN
 # -------------------------------------------------
+k_bits  = np.log2(M)
+EbNo    = 10**(EbNo_db / 10)
+SNR_slc = EbNo * k_bits
+SNR_ch  = SNR_slc / N
 
-k = np.log2(M)
-EbNo = 10**(EbNo_db/10)
-SNR_slc = EbNo * k
-SNR_ch = SNR_slc / N
-
-Ps = np.var(yup)
-Pn = Ps / SNR_ch
-
-n = np.sqrt(Pn/2) * (
-    np.random.randn(len(yup)) +
-    1j*np.random.randn(len(yup))
-)
-
-rx = yup + n
+Ps   = np.var(yup)
+Pn   = Ps / SNR_ch
+noise = np.sqrt(Pn / 2) * (np.random.randn(len(yup)) + 1j * np.random.randn(len(yup)))
+rx   = yup + noise
 
 # -------------------------------------------------
-# RX
+# RX: matched filter + decimation
 # -------------------------------------------------
+h_mf  = np.conj(h[::-1])
+ymf   = lfilter(h_mf, 1, np.concatenate([rx, np.zeros(h_delay)]))
+ymf   = ymf[h_delay:]
 
-h_mf = np.conj(h[::-1])
-ymf = lfilter(h_mf, 1, np.concatenate([rx, np.zeros(h_delay)]))
-ymf = ymf[h_delay:]
-
-PHASE = 0
-rx_down = ymf[PHASE::N] # y[k]
+PHASE    = 0
+rx_down  = ymf[PHASE::N]
 
 # -------------------------------------------------
-# DELAY ESTIMATION USING CROSS-CORRELATION
+# Delay estimation and compensation
 # -------------------------------------------------
-
-def estimate_delay(tx_symbols, rx_symbols):
-
-    # usamos parte central para evitar transitorios
-    Lcorr = min(len(tx_symbols), len(rx_symbols))
-    tx = tx_symbols[:Lcorr]
-    rx = rx_symbols[:Lcorr]
-
-    # correlación cruzada compleja
-    corr = np.correlate(rx, tx, mode='full')
-
-    delay = np.argmax(np.abs(corr)) - (Lcorr - 1)
-
-    return delay
-
-# Estimar delay en símbolos
 delay_est = estimate_delay(ak, rx_down)
+log(f"Estimated symbol delay = {delay_est}")
 
-print(f"\nEstimated symbol delay = {delay_est}")
-
-# Compensar delay
 if delay_est > 0:
     rx_aligned = rx_down[delay_est:]
     tx_aligned = ak[:len(rx_aligned)]
@@ -159,73 +106,56 @@ else:
     tx_aligned = ak[:len(rx_aligned)]
 
 # -------------------------------------------------
-# Constellation Plot
+# Slicer + BER
 # -------------------------------------------------
-
-if enable_plots:
-    plt.figure()
-    pts = rx_down[500:-100]
-    plt.plot(np.real(pts), np.imag(pts), 'o')
-    plt.xlabel('In phase')
-    plt.ylabel('In Quadrature')
-    plt.title(f'Constellation QAM-{M}, EbNo = {EbNo_db:.0f} dB')
-    if M == 4:
-        plt.xlim([-2,2])
-        plt.ylim([-2,2])
-    if M == 16:
-        LIM = 5
-        plt.xlim([-LIM,LIM])
-        plt.ylim([-LIM,LIM])
-    else:
-        LIM = 9
-        plt.xlim([-LIM,LIM])
-        plt.ylim([-LIM,LIM])
-    plt.grid(True)
-    plt.show()
-
-# -------------------------------------------------
-# SLICER
-# -------------------------------------------------
-
-def slicer(rx, M):
-    const = qammod(np.arange(M), M)  # todos los símbolos posibles
-    
-    idx = np.argmin(np.abs(rx[:, None] - const), axis=1)
-    
-    return const[idx]
-
 ak_hat = slicer(rx_aligned, M)
 
-# -------------------------------------------------
-# BER
-# -------------------------------------------------
+use_frac     = 0.6
+start        = int((1 - use_frac) * len(ak_hat))
+ak_hat_cut   = ak_hat[start:]
+tx_cut       = tx_aligned[start:]
 
-def ber_theoretical(EbNo_db, M):
-    k = np.log2(M)
-    EbNo = 10**(EbNo_db/10)
-    return (4/k)*(1-1/np.sqrt(M))*0.5*erfc(
-        np.sqrt(3*k*EbNo/(M-1))/np.sqrt(2)
-    )
-
-ber_theo = ber_theoretical(EbNo_db, M)
-
-# Solo quiero medir BER del final de mi simulación
-use_frac = 0.6  # fracción de la señal que querés usar (ej: 0.6 = 60%)
-
-start = int((1 - use_frac) * len(ak_hat))
-
-ak_hat_cut = ak_hat[start:]
-tx_cut = tx_aligned[start:]
-
-# SER simulada
 n_errors = np.sum(ak_hat_cut != tx_cut)
-ser_sim = n_errors / len(ak_hat_cut)
+ser_sim  = n_errors / len(ak_hat_cut)
+ber_sim  = ser_sim / np.log2(M)
+ber_theo = ber_mqam(EbNo_db, M)
 
-# BER aproximada
-ber_sim = ser_sim / np.log2(M)
+log()
+log(f"Theo BER = {ber_theo:.2e}")
+log(f"Sim  SER = {ser_sim:.2e}")
+log(f"Sim  BER = {ber_sim:.2e}")
+log(f"Errors   = {n_errors}")
 
-# Some prints
-print("\n - Theo BER = %.2e" % ber_theo)
-print("\n - Sim SER  = %.2e" % ser_sim)
-print("\n - Sim BER  = %.2e" % ber_sim)
-print("\n - Errors   = %d" % n_errors)
+# -------------------------------------------------
+# Constellation plot
+# -------------------------------------------------
+pts = rx_down[500:-100]
+fig, ax = plt.subplots(figsize=(6, 6))
+ax.plot(np.real(pts), np.imag(pts), 'o', markersize=2, alpha=0.5)
+ax.set_xlabel('In-Phase (I)')
+ax.set_ylabel('Quadrature (Q)')
+ax.set_title(f'Constelación RX — {M}-QAM, Eb/N0 = {EbNo_db:.0f} dB')
+if M == 4:
+    LIM = 2
+elif M == 16:
+    LIM = 5
+else:
+    LIM = 9
+ax.set_xlim([-LIM, LIM])
+ax.set_ylim([-LIM, LIM])
+ax.set_aspect('equal')
+ax.grid(True)
+fig.savefig(os.path.join(RESULTS_DIR, 'basic_tx_rx_01_constellation.png'), dpi=150, bbox_inches='tight')
+plt.close(fig)
+
+# -------------------------------------------------
+# Save text output
+# -------------------------------------------------
+log()
+log("=== Output files saved ===")
+for fname in sorted(os.listdir(RESULTS_DIR)):
+    if fname.startswith('basic_tx_rx'):
+        log(f"  {os.path.join(RESULTS_DIR, fname)}")
+
+with open(os.path.join(RESULTS_DIR, 'basic_tx_rx_output.txt'), 'w') as f_out:
+    f_out.write('\n'.join(_log_lines) + '\n')
